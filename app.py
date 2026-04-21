@@ -34,42 +34,57 @@ def identify():
             "error": "fpcalc not installed or not in PATH"
         }), 500
 
-    # 3. Save temp file
-    with tempfile.NamedTemporaryFile(delete=False, suffix=".mp3") as tmp:
+    # =========================
+    # 🔥 FIX 1: ALWAYS USE .m4a (iOS recorder output)
+    # =========================
+    with tempfile.NamedTemporaryFile(delete=False, suffix=".m4a") as tmp:
         audio.save(tmp.name)
 
         try:
+            # =========================
+            # 🔥 FIX 2: force timeout + better error capture
+            # =========================
             result = subprocess.run(
-                [fpcalc_path, tmp.name],
+                [fpcalc_path, "-json", tmp.name],
                 capture_output=True,
                 text=True,
-                check=True
+                timeout=10
             )
+
         except Exception as e:
             return jsonify({
-                "error": "fpcalc failed",
+                "error": "fpcalc crashed",
                 "details": str(e)
             }), 500
 
     # =========================
-    # 🔍 DEBUG STEP 1: RAW OUTPUT
+    # 🔍 DEBUG OUTPUT
     # =========================
-    print("===== FPCALC OUTPUT =====")
+    print("===== FPCALC RAW OUTPUT =====")
     print(result.stdout)
-    print("=========================")
+    print("=============================")
 
+    # =========================
+    # 🔥 FIX 3: handle fpcalc JSON output (more reliable than parsing text)
+    # =========================
     fingerprint = None
     duration = None
 
-    for line in result.stdout.splitlines():
-        if line.startswith("FINGERPRINT="):
-            fingerprint = line.split("=", 1)[1]
-        if line.startswith("DURATION="):
-            duration = line.split("=", 1)[1]
+    try:
+        import json
+        data = json.loads(result.stdout)
 
-    # =========================
-    # 🔍 DEBUG STEP 2: VERIFY EXTRACTION
-    # =========================
+        fingerprint = data.get("fingerprint")
+        duration = data.get("duration")
+
+    except Exception:
+        # fallback (old format)
+        for line in result.stdout.splitlines():
+            if line.startswith("FINGERPRINT="):
+                fingerprint = line.split("=", 1)[1]
+            if line.startswith("DURATION="):
+                duration = line.split("=", 1)[1]
+
     print("Fingerprint:", fingerprint)
     print("Duration:", duration)
 
@@ -94,28 +109,21 @@ def identify():
 
         data = res.json()
 
-        # =========================
-        # 🔍 DEBUG STEP 3: RAW API RESPONSE
-        # =========================
         print("===== ACOUSTID RESPONSE =====")
         print(data)
         print("=============================")
 
-        # safer parsing
         results = data.get("results", [])
 
         track = None
         score = None
 
         for r in results:
-            if "recordings" in r and r["recordings"]:
+            if r.get("recordings"):
                 track = r["recordings"][0]
                 score = r.get("score")
                 break
 
-        # =========================
-        # 🔍 DEBUG STEP 4: NO MATCH CASE
-        # =========================
         if not track:
             return jsonify({
                 "error": "no match found",
@@ -128,7 +136,7 @@ def identify():
                 track.get("artists", [{}])[0].get("name", "Unknown")
                 if track.get("artists") else "Unknown"
             ),
-            "score": score  # 🔥 helpful debug metric
+            "score": score
         })
 
     except Exception as e:
