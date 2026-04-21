@@ -1,0 +1,6 @@
+services:
+  - type: web
+    name: dj-acoustid-backend
+    env: python
+    buildCommand: apt-get update && apt-get install -y chromaprint && pip install -r requirements.txt
+    startCommand: python app.py
