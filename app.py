@@ -7,7 +7,6 @@ import os
 
 app = Flask(__name__)
 
-# ✅ Use environment variable instead of hardcoding
 ACOUSTID_KEY = os.getenv("ACOUSTID_KEY")
 
 
@@ -28,7 +27,7 @@ def identify():
 
     audio = request.files["file"]
 
-    # 2. Find fpcalc dynamically (works with Docker)
+    # 2. Check fpcalc
     fpcalc_path = shutil.which("fpcalc")
     if not fpcalc_path:
         return jsonify({
@@ -39,7 +38,6 @@ def identify():
     with tempfile.NamedTemporaryFile(delete=False, suffix=".mp3") as tmp:
         audio.save(tmp.name)
 
-        # 4. Run fingerprint tool
         try:
             result = subprocess.run(
                 [fpcalc_path, tmp.name],
@@ -53,6 +51,13 @@ def identify():
                 "details": str(e)
             }), 500
 
+    # =========================
+    # 🔍 DEBUG STEP 1: RAW OUTPUT
+    # =========================
+    print("===== FPCALC OUTPUT =====")
+    print(result.stdout)
+    print("=========================")
+
     fingerprint = None
     duration = None
 
@@ -62,13 +67,19 @@ def identify():
         if line.startswith("DURATION="):
             duration = line.split("=", 1)[1]
 
-    # 5. Validate fingerprint
+    # =========================
+    # 🔍 DEBUG STEP 2: VERIFY EXTRACTION
+    # =========================
+    print("Fingerprint:", fingerprint)
+    print("Duration:", duration)
+
     if not fingerprint or not duration:
         return jsonify({
-            "error": "fingerprint extraction failed"
+            "error": "fingerprint extraction failed",
+            "debug": result.stdout
         }), 500
 
-    # 6. Call AcoustID API
+    # 4. Call AcoustID API
     try:
         res = requests.get(
             "https://api.acoustid.org/v2/lookup",
@@ -83,17 +94,41 @@ def identify():
 
         data = res.json()
 
-        track = (
-            data.get("results", [{}])[0]
-                .get("recordings", [{}])[0]
-        )
+        # =========================
+        # 🔍 DEBUG STEP 3: RAW API RESPONSE
+        # =========================
+        print("===== ACOUSTID RESPONSE =====")
+        print(data)
+        print("=============================")
+
+        # safer parsing
+        results = data.get("results", [])
+
+        track = None
+        score = None
+
+        for r in results:
+            if "recordings" in r and r["recordings"]:
+                track = r["recordings"][0]
+                score = r.get("score")
+                break
+
+        # =========================
+        # 🔍 DEBUG STEP 4: NO MATCH CASE
+        # =========================
+        if not track:
+            return jsonify({
+                "error": "no match found",
+                "raw_response": data
+            })
 
         return jsonify({
             "title": track.get("title", "Unknown"),
             "artist": (
                 track.get("artists", [{}])[0].get("name", "Unknown")
                 if track.get("artists") else "Unknown"
-            )
+            ),
+            "score": score  # 🔥 helpful debug metric
         })
 
     except Exception as e:
@@ -104,6 +139,5 @@ def identify():
 
 
 if __name__ == "__main__":
-    # Render/Docker uses PORT env variable
     port = int(os.environ.get("PORT", 10000))
     app.run(host="0.0.0.0", port=port)
