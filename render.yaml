@@ -4,9 +4,10 @@ services:
     env: python
 
     buildCommand: |
-      apt-get update
-      apt-get install -y chromaprint
-      which fpcalc
+      apt-get update -y
+      apt-get install -y ffmpeg libchromaprint-tools
+      which fpcalc || true
+      fpcalc --version || true
       pip install -r requirements.txt
 
-    startCommand: gunicorn app:app
+    startCommand: python app.py
