@@ -4,10 +4,10 @@ services:
     env: python
 
     buildCommand: |
-      apt-get update -y
+      apt-get update
       apt-get install -y ffmpeg chromaprint
-      which fpcalc || true
-      find / -name fpcalc || true
+      which fpcalc
+      fpcalc --version
       pip install -r requirements.txt
 
     startCommand: python app.py
