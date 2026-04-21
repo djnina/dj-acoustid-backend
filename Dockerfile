@@ -5,6 +5,8 @@ RUN apt-get update && apt-get install -y \
     ffmpeg \
     libchromaprint-tools \
     && rm -rf /var/lib/apt/lists/*
+    
+RUN which fpcalc && fpcalc -version    
 
 # Set working directory
 WORKDIR /app
