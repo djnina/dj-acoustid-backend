@@ -17,52 +17,48 @@ def home():
 @app.route("/identify", methods=["POST"])
 def identify():
 
-    # 1. Validate file
     if "file" not in request.files:
         return jsonify({"error": "no file"}), 400
 
     audio = request.files["file"]
 
-    # 2. Check if fpcalc exists (IMPORTANT FIX)
-    if not shutil.which("fpcalc"):
+    # ✅ find fpcalc dynamically (IMPORTANT)
+    fpcalc_path = shutil.which("fpcalc")
+    if not fpcalc_path:
         return jsonify({
-            "error": "fpcalc not installed on server"
+            "error": "fpcalc not installed or not in PATH"
         }), 500
 
-    # 3. Save temp file
-    with tempfile.NamedTemporaryFile(delete=False, suffix=".m4a") as tmp:
+    with tempfile.NamedTemporaryFile(delete=False, suffix=".mp3") as tmp:
         audio.save(tmp.name)
 
-        # 4. Run fingerprint tool safely
         try:
             result = subprocess.run(
-                ["/usr/bin/fpcalc", tmp.name],
+                [fpcalc_path, tmp.name],
                 capture_output=True,
                 text=True,
                 check=True
             )
-        except subprocess.CalledProcessError as e:
+        except Exception as e:
             return jsonify({
                 "error": "fpcalc failed",
-                "details": e.stderr
+                "details": str(e)
             }), 500
 
         fingerprint = None
         duration = None
 
-        for line in result.stdout.split("\n"):
+        for line in result.stdout.splitlines():
             if line.startswith("FINGERPRINT="):
                 fingerprint = line.split("=", 1)[1]
             if line.startswith("DURATION="):
                 duration = line.split("=", 1)[1]
 
-        # 5. Validate fingerprint
         if not fingerprint or not duration:
             return jsonify({
                 "error": "fingerprint extraction failed"
             }), 500
 
-        # 6. Call AcoustID API
         try:
             res = requests.get(
                 "https://api.acoustid.org/v2/lookup",
