@@ -18,7 +18,6 @@ def home():
 @app.route("/identify", methods=["POST"])
 def identify():
 
-    # 1. Validate file
     if "file" not in request.files:
         return jsonify({"error": "no file"}), 400
 
@@ -27,63 +26,71 @@ def identify():
 
     audio = request.files["file"]
 
-    # 2. Check fpcalc
     fpcalc_path = shutil.which("fpcalc")
+    ffmpeg_path = shutil.which("ffmpeg")
+
     if not fpcalc_path:
+        return jsonify({"error": "fpcalc not installed"}), 500
+
+    if not ffmpeg_path:
+        return jsonify({"error": "ffmpeg not installed"}), 500
+
+    with tempfile.NamedTemporaryFile(delete=False, suffix=".m4a") as tmp_in:
+        audio.save(tmp_in.name)
+
+    # =========================
+    # 🔥 STEP 1: convert to WAV
+    # =========================
+    wav_file = tempfile.NamedTemporaryFile(delete=False, suffix=".wav").name
+
+    try:
+        subprocess.run(
+            [
+                ffmpeg_path,
+                "-y",
+                "-i", tmp_in.name,
+                "-ac", "1",
+                "-ar", "44100",
+                wav_file
+            ],
+            capture_output=True,
+            text=True,
+            check=True
+        )
+    except Exception as e:
         return jsonify({
-            "error": "fpcalc not installed or not in PATH"
+            "error": "ffmpeg conversion failed",
+            "details": str(e)
         }), 500
 
     # =========================
-    # 🔥 FIX 1: ALWAYS USE .m4a (iOS recorder output)
+    # 🔥 STEP 2: fpcalc on WAV
     # =========================
-    with tempfile.NamedTemporaryFile(delete=False, suffix=".m4a") as tmp:
-        audio.save(tmp.name)
+    try:
+        result = subprocess.run(
+            [fpcalc_path, wav_file],
+            capture_output=True,
+            text=True,
+            check=True
+        )
+    except Exception as e:
+        return jsonify({
+            "error": "fpcalc failed",
+            "details": str(e)
+        }), 500
 
-        try:
-            # =========================
-            # 🔥 FIX 2: force timeout + better error capture
-            # =========================
-            result = subprocess.run(
-                [fpcalc_path, "-json", tmp.name],
-                capture_output=True,
-                text=True,
-                timeout=10
-            )
-
-        except Exception as e:
-            return jsonify({
-                "error": "fpcalc crashed",
-                "details": str(e)
-            }), 500
-
-    # =========================
-    # 🔍 DEBUG OUTPUT
-    # =========================
-    print("===== FPCALC RAW OUTPUT =====")
+    print("===== FPCALC OUTPUT =====")
     print(result.stdout)
-    print("=============================")
+    print("=========================")
 
-    # =========================
-    # 🔥 FIX 3: handle fpcalc JSON output (more reliable than parsing text)
-    # =========================
     fingerprint = None
     duration = None
 
-    try:
-        import json
-        data = json.loads(result.stdout)
-
-        fingerprint = data.get("fingerprint")
-        duration = data.get("duration")
-
-    except Exception:
-        # fallback (old format)
-        for line in result.stdout.splitlines():
-            if line.startswith("FINGERPRINT="):
-                fingerprint = line.split("=", 1)[1]
-            if line.startswith("DURATION="):
-                duration = line.split("=", 1)[1]
+    for line in result.stdout.splitlines():
+        if line.startswith("FINGERPRINT="):
+            fingerprint = line.split("=", 1)[1]
+        if line.startswith("DURATION="):
+            duration = line.split("=", 1)[1]
 
     print("Fingerprint:", fingerprint)
     print("Duration:", duration)
@@ -94,7 +101,9 @@ def identify():
             "debug": result.stdout
         }), 500
 
-    # 4. Call AcoustID API
+    # =========================
+    # 🔥 STEP 3: AcoustID API
+    # =========================
     try:
         res = requests.get(
             "https://api.acoustid.org/v2/lookup",
@@ -119,7 +128,7 @@ def identify():
         score = None
 
         for r in results:
-            if r.get("recordings"):
+            if "recordings" in r and r["recordings"]:
                 track = r["recordings"][0]
                 score = r.get("score")
                 break
