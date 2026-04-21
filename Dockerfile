@@ -3,7 +3,7 @@ FROM python:3.11-slim
 # Install system dependencies (THIS is the key fix)
 RUN apt-get update && apt-get install -y \
     ffmpeg \
-    chromaprint \
+    libchromaprint-tools \
     && rm -rf /var/lib/apt/lists/*
 
 # Set working directory
