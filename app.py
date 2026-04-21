@@ -36,7 +36,7 @@ def identify():
         # 4. Run fingerprint tool safely
         try:
             result = subprocess.run(
-                ["fpcalc", tmp.name],
+                ["/usr/bin/fpcalc", tmp.name],
                 capture_output=True,
                 text=True,
                 check=True
