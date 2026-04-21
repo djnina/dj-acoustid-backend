@@ -5,9 +5,9 @@ services:
 
     buildCommand: |
       apt-get update -y
-      apt-get install -y ffmpeg libchromaprint-tools
+      apt-get install -y ffmpeg chromaprint
       which fpcalc || true
-      fpcalc --version || true
+      find / -name fpcalc || true
       pip install -r requirements.txt
 
     startCommand: python app.py
