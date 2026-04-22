@@ -8,11 +8,7 @@ import json
 
 app = Flask(__name__)
 
-# 🔑 Load API key safely
-ACOUSTID_KEY = os.environ.get("ACOUSTID_KEY", "").strip()
-
-# 🔍 startup debug (Render log check)
-print("🔑 ACOUSTID KEY LOADED:", bool(ACOUSTID_KEY))
+ACOUSTID_KEY = os.getenv("ACOUSTID_KEY")
 
 
 @app.route("/")
@@ -23,23 +19,36 @@ def home():
 @app.route("/identify", methods=["POST"])
 def identify():
 
-    # 1. Validate file
+    # -------------------------
+    # 🔐 API KEY CHECK
+    # -------------------------
+    if not ACOUSTID_KEY:
+        return jsonify({"error": "Missing ACOUSTID_KEY env var"}), 500
+
+    if len(ACOUSTID_KEY) < 10:
+        return jsonify({
+            "error": "Invalid ACOUSTID_KEY (too short)",
+            "hint": "Use key from acoustid.org/api-key"
+        }), 500
+
+    # -------------------------
+    # 📦 FILE CHECK
+    # -------------------------
     if "file" not in request.files:
         return jsonify({"error": "no file"}), 400
 
-    if not ACOUSTID_KEY:
-        return jsonify({"error": "Missing or invalid ACOUSTID_KEY"}), 500
-
     audio = request.files["file"]
 
-    # 2. Check fpcalc
+    # -------------------------
+    # fpcalc check
+    # -------------------------
     fpcalc_path = shutil.which("fpcalc")
     if not fpcalc_path:
-        return jsonify({
-            "error": "fpcalc not installed or not in PATH"
-        }), 500
+        return jsonify({"error": "fpcalc not installed"}), 500
 
-    # 3. Save temp file (iOS-safe format)
+    # -------------------------
+    # TEMP FILE
+    # -------------------------
     with tempfile.NamedTemporaryFile(delete=False, suffix=".m4a") as tmp:
         audio.save(tmp.name)
 
@@ -50,19 +59,19 @@ def identify():
                 text=True,
                 timeout=10
             )
-
         except Exception as e:
-            return jsonify({
-                "error": "fpcalc crashed",
-                "details": str(e)
-            }), 500
+            return jsonify({"error": "fpcalc failed", "details": str(e)}), 500
 
-    # 🔍 DEBUG: fpcalc output
+    # -------------------------
+    # DEBUG OUTPUT
+    # -------------------------
     print("===== FPCALC OUTPUT =====")
     print(result.stdout)
     print("=========================")
 
-    # 4. Parse fingerprint
+    # -------------------------
+    # PARSE FINGERPRINT
+    # -------------------------
     fingerprint = None
     duration = None
 
@@ -70,7 +79,6 @@ def identify():
         data = json.loads(result.stdout)
         fingerprint = data.get("fingerprint")
         duration = data.get("duration")
-
     except Exception:
         for line in result.stdout.splitlines():
             if line.startswith("FINGERPRINT="):
@@ -78,16 +86,15 @@ def identify():
             if line.startswith("DURATION="):
                 duration = line.split("=", 1)[1]
 
-    print("Fingerprint:", fingerprint)
-    print("Duration:", duration)
-
     if not fingerprint or not duration:
         return jsonify({
             "error": "fingerprint extraction failed",
             "debug": result.stdout
         }), 500
 
-    # 5. Call AcoustID API
+    # -------------------------
+    # 🔎 ACOUTSTID REQUEST
+    # -------------------------
     try:
         res = requests.get(
             "https://api.acoustid.org/v2/lookup",
@@ -100,25 +107,20 @@ def identify():
             timeout=10
         )
 
-        # 🔥 FIX: handle API errors properly
-        if res.status_code != 200:
-            return jsonify({
-                "error": "AcoustID API request failed",
-                "status_code": res.status_code,
-                "response": res.text
-            }), 500
-
-        try:
-            data = res.json()
-        except Exception:
-            return jsonify({
-                "error": "Invalid JSON from AcoustID",
-                "raw": res.text
-            }), 500
+        data = res.json()
 
         print("===== ACOUSTID RESPONSE =====")
         print(data)
         print("=============================")
+
+        # -------------------------
+        # ❌ API ERROR HANDLING
+        # -------------------------
+        if data.get("status") == "error":
+            return jsonify({
+                "error": "AcoustID API error",
+                "response": data
+            }), 500
 
         results = data.get("results", [])
 
@@ -135,7 +137,7 @@ def identify():
             return jsonify({
                 "error": "no match found",
                 "raw_response": data
-            }), 200
+            })
 
         return jsonify({
             "title": track.get("title", "Unknown"),
