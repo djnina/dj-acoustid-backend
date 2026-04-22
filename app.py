@@ -4,10 +4,15 @@ import requests
 import tempfile
 import shutil
 import os
+import json
 
 app = Flask(__name__)
 
-ACOUSTID_KEY = os.getenv("ACOUSTID_KEY")
+# 🔑 Load API key safely
+ACOUSTID_KEY = os.environ.get("ACOUSTID_KEY", "").strip()
+
+# 🔍 startup debug (Render log check)
+print("🔑 ACOUSTID KEY LOADED:", bool(ACOUSTID_KEY))
 
 
 @app.route("/")
@@ -23,7 +28,7 @@ def identify():
         return jsonify({"error": "no file"}), 400
 
     if not ACOUSTID_KEY:
-        return jsonify({"error": "Missing ACOUSTID_KEY"}), 500
+        return jsonify({"error": "Missing or invalid ACOUSTID_KEY"}), 500
 
     audio = request.files["file"]
 
@@ -34,16 +39,11 @@ def identify():
             "error": "fpcalc not installed or not in PATH"
         }), 500
 
-    # =========================
-    # 🔥 FIX 1: ALWAYS USE .m4a (iOS recorder output)
-    # =========================
+    # 3. Save temp file (iOS-safe format)
     with tempfile.NamedTemporaryFile(delete=False, suffix=".m4a") as tmp:
         audio.save(tmp.name)
 
         try:
-            # =========================
-            # 🔥 FIX 2: force timeout + better error capture
-            # =========================
             result = subprocess.run(
                 [fpcalc_path, "-json", tmp.name],
                 capture_output=True,
@@ -57,28 +57,21 @@ def identify():
                 "details": str(e)
             }), 500
 
-    # =========================
-    # 🔍 DEBUG OUTPUT
-    # =========================
-    print("===== FPCALC RAW OUTPUT =====")
+    # 🔍 DEBUG: fpcalc output
+    print("===== FPCALC OUTPUT =====")
     print(result.stdout)
-    print("=============================")
+    print("=========================")
 
-    # =========================
-    # 🔥 FIX 3: handle fpcalc JSON output (more reliable than parsing text)
-    # =========================
+    # 4. Parse fingerprint
     fingerprint = None
     duration = None
 
     try:
-        import json
         data = json.loads(result.stdout)
-
         fingerprint = data.get("fingerprint")
         duration = data.get("duration")
 
     except Exception:
-        # fallback (old format)
         for line in result.stdout.splitlines():
             if line.startswith("FINGERPRINT="):
                 fingerprint = line.split("=", 1)[1]
@@ -94,7 +87,7 @@ def identify():
             "debug": result.stdout
         }), 500
 
-    # 4. Call AcoustID API
+    # 5. Call AcoustID API
     try:
         res = requests.get(
             "https://api.acoustid.org/v2/lookup",
@@ -107,7 +100,21 @@ def identify():
             timeout=10
         )
 
-        data = res.json()
+        # 🔥 FIX: handle API errors properly
+        if res.status_code != 200:
+            return jsonify({
+                "error": "AcoustID API request failed",
+                "status_code": res.status_code,
+                "response": res.text
+            }), 500
+
+        try:
+            data = res.json()
+        except Exception:
+            return jsonify({
+                "error": "Invalid JSON from AcoustID",
+                "raw": res.text
+            }), 500
 
         print("===== ACOUSTID RESPONSE =====")
         print(data)
@@ -128,7 +135,7 @@ def identify():
             return jsonify({
                 "error": "no match found",
                 "raw_response": data
-            })
+            }), 200
 
         return jsonify({
             "title": track.get("title", "Unknown"),
