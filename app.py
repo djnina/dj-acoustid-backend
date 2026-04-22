@@ -1,19 +1,16 @@
 from flask import Flask, request, jsonify
-import subprocess
 import requests
 import tempfile
-import shutil
 import os
-import json
 
 app = Flask(__name__)
 
-ACOUSTID_KEY = os.getenv("ACOUSTID_KEY")
+AUDD_API_KEY = os.getenv("AUDD_API_KEY")
 
 
 @app.route("/")
 def home():
-    return "DJ AcoustID backend is running"
+    return "DJ AudD backend is running"
 
 
 @app.route("/identify", methods=["POST"])
@@ -22,14 +19,8 @@ def identify():
     # -------------------------
     # 🔐 API KEY CHECK
     # -------------------------
-    if not ACOUSTID_KEY:
-        return jsonify({"error": "Missing ACOUSTID_KEY env var"}), 500
-
-    if len(ACOUSTID_KEY) < 10:
-        return jsonify({
-            "error": "Invalid ACOUSTID_KEY (too short)",
-            "hint": "Use key from acoustid.org/api-key"
-        }), 500
+    if not AUDD_API_KEY:
+        return jsonify({"error": "Missing AUDD_API_KEY"}), 500
 
     # -------------------------
     # 📦 FILE CHECK
@@ -40,117 +31,61 @@ def identify():
     audio = request.files["file"]
 
     # -------------------------
-    # fpcalc check
+    # 💾 TEMP FILE
     # -------------------------
-    fpcalc_path = shutil.which("fpcalc")
-    if not fpcalc_path:
-        return jsonify({"error": "fpcalc not installed"}), 500
-
-    # -------------------------
-    # TEMP FILE
-    # -------------------------
-    with tempfile.NamedTemporaryFile(delete=False, suffix=".m4a") as tmp:
+    with tempfile.NamedTemporaryFile(delete=False, suffix=".wav") as tmp:
         audio.save(tmp.name)
 
-        try:
-            result = subprocess.run(
-                [fpcalc_path, "-json", tmp.name],
-                capture_output=True,
-                text=True,
-                timeout=10
+    try:
+        # -------------------------
+        # 🚀 AUDD REQUEST
+        # -------------------------
+        with open(tmp.name, "rb") as f:
+            res = requests.post(
+                "https://api.audd.io/",
+                data={
+                    "api_token": AUDD_API_KEY,
+                    "return": "spotify,apple_music"
+                },
+                files={
+                    "file": f
+                },
+                timeout=15
             )
-        except Exception as e:
-            return jsonify({"error": "fpcalc failed", "details": str(e)}), 500
-
-    # -------------------------
-    # DEBUG OUTPUT
-    # -------------------------
-    print("===== FPCALC OUTPUT =====")
-    print(result.stdout)
-    print("=========================")
-
-    # -------------------------
-    # PARSE FINGERPRINT
-    # -------------------------
-    fingerprint = None
-    duration = None
-
-    try:
-        data = json.loads(result.stdout)
-        fingerprint = data.get("fingerprint")
-        duration = data.get("duration")
-    except Exception:
-        for line in result.stdout.splitlines():
-            if line.startswith("FINGERPRINT="):
-                fingerprint = line.split("=", 1)[1]
-            if line.startswith("DURATION="):
-                duration = line.split("=", 1)[1]
-
-    if not fingerprint or not duration:
-        return jsonify({
-            "error": "fingerprint extraction failed",
-            "debug": result.stdout
-        }), 500
-
-    # -------------------------
-    # 🔎 ACOUTSTID REQUEST
-    # -------------------------
-    try:
-        res = requests.get(
-            "https://api.acoustid.org/v2/lookup",
-            params={
-                "client": ACOUSTID_KEY,
-                "fingerprint": fingerprint,
-                "duration": duration,
-                "meta": "recordings"
-            },
-            timeout=10
-        )
 
         data = res.json()
 
-        print("===== ACOUSTID RESPONSE =====")
+        print("===== AUDD RESPONSE =====")
         print(data)
-        print("=============================")
+        print("=========================")
 
         # -------------------------
-        # ❌ API ERROR HANDLING
+        # ❌ API ERROR CHECK
         # -------------------------
         if data.get("status") == "error":
             return jsonify({
-                "error": "AcoustID API error",
+                "error": "AudD API error",
                 "response": data
             }), 500
 
-        results = data.get("results", [])
+        result = data.get("result")
 
-        track = None
-        score = None
-
-        for r in results:
-            if r.get("recordings"):
-                track = r["recordings"][0]
-                score = r.get("score")
-                break
-
-        if not track:
+        if not result:
             return jsonify({
                 "error": "no match found",
                 "raw_response": data
             })
 
         return jsonify({
-            "title": track.get("title", "Unknown"),
-            "artist": (
-                track.get("artists", [{}])[0].get("name", "Unknown")
-                if track.get("artists") else "Unknown"
-            ),
-            "score": score
+            "title": result.get("title", "Unknown"),
+            "artist": result.get("artist", "Unknown"),
+            "album": result.get("album", "Unknown"),
+            "spotify": result.get("spotify", {}).get("external_urls", {}).get("spotify")
         })
 
     except Exception as e:
         return jsonify({
-            "error": "AcoustID request failed",
+            "error": "AudD request failed",
             "details": str(e)
         }), 500
 
